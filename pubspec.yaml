@@ -1,6 +1,6 @@
 name: flutter_frappe_chat
 description: A customizable Flutter package for Frappe Chat integration with WebSocket and API handling.
-version: 0.0.1
+version: 0.1.0
 homepage: https://github.com/handoud/flutter_frappe_chat
 
 environment:
