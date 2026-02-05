@@ -3,17 +3,62 @@ import 'package:socket_io_client/socket_io_client.dart' as IO;
 import '../models/chat_config.dart';
 import '../models/chat_message.dart';
 
+/// Manages WebSocket connections to the Frappe Chat server for real-time updates.
+///
+/// This class handles:
+/// - Establishing and maintaining WebSocket connections
+/// - Listening for incoming messages
+/// - Listening for typing indicators
+/// - Sending typing status updates
+/// - Handling connection lifecycle
+///
+/// Example usage:
+/// ```dart
+/// final socketManager = FrappeSocketManager(config);
+/// 
+/// socketManager.onMessageReceived = (message) {
+///   print('New message: ${message.content}');
+/// };
+/// 
+/// socketManager.onTypingChanged = (isTyping) {
+///   print('User is typing: $isTyping');
+/// };
+/// 
+/// socketManager.connect('room-id');
+/// ```
 class FrappeSocketManager {
+  /// The Socket.IO connection instance.
   late IO.Socket socket;
+  
+  /// The configuration containing server URL and authentication details.
   final FrappeChatConfig config;
 
-  // Callbacks
+  /// Callback invoked when a new message is received.
+  ///
+  /// Set this to handle incoming chat messages in real-time.
   Function(ChatMessage)? onMessageReceived;
+  
+  /// Callback invoked when typing status changes.
+  ///
+  /// Set this to update the UI when other users start or stop typing.
   Function(bool)? onTypingChanged;
+  
+  /// Callback invoked when chat data is updated.
+  ///
+  /// Set this to handle general chat updates from the server.
   Function(Map<String, dynamic>)? onChatUpdate;
 
+  /// Creates a new [FrappeSocketManager] with the given [config].
   FrappeSocketManager(this.config);
 
+  /// Establishes a WebSocket connection to the Frappe server for the specified [room].
+  ///
+  /// This method:
+  /// 1. Creates a Socket.IO connection with authentication headers
+  /// 2. Connects to the server
+  /// 3. Sets up event listeners for messages, typing, and updates
+  ///
+  /// The connection is automatically authenticated using credentials from [config].
   void connect(String room) {
     socket = IO.io(
       config.socketUrl,
@@ -41,6 +86,12 @@ class FrappeSocketManager {
     socket.onError((data) => debugPrint('Socket Error: $data'));
   }
 
+  /// Sets up event listeners for the specified [room].
+  ///
+  /// Listens for:
+  /// - New messages on the room channel
+  /// - Typing indicators on the "room:typing" channel
+  /// - General chat updates on "latest_chat_updates"
   void _setupListeners(String room) {
     // Listen for new messages
     socket.on(room, (data) {
@@ -72,6 +123,13 @@ class FrappeSocketManager {
     });
   }
 
+  /// Sends a typing status update to the server.
+  ///
+  /// Emits a typing event for the specified [room] and [user].
+  /// Set [isTyping] to true when the user starts typing and false when they stop.
+  ///
+  /// Note: This emits a socket event. Depending on your Frappe configuration,
+  /// you might also need to call the REST API endpoint via [FrappeApiService.setTyping].
   void sendTyping(String room, String user, bool isTyping) {
     if (socket.connected) {
       socket.emit('doc_events', {
@@ -92,6 +150,9 @@ class FrappeSocketManager {
     }
   }
 
+  /// Disconnects the WebSocket connection.
+  ///
+  /// Call this when the chat screen is disposed to properly clean up resources.
   void disconnect() {
     socket.disconnect();
   }

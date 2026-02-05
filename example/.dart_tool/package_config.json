@@ -152,6 +152,12 @@
       "languageVersion": "3.0"
     },
     {
+      "name": "flutter_frappe_chat",
+      "rootUri": "../../",
+      "packageUri": "lib/",
+      "languageVersion": "3.0"
+    },
+    {
       "name": "flutter_lints",
       "rootUri": "file:///Users/Handoud/.pub-cache/hosted/pub.dev/flutter_lints-3.0.2",
       "packageUri": "lib/",
@@ -632,7 +638,7 @@
       "languageVersion": "3.8"
     },
     {
-      "name": "flutter_frappe_chat",
+      "name": "frappe_chat_example",
       "rootUri": "../",
       "packageUri": "lib/",
       "languageVersion": "3.0"

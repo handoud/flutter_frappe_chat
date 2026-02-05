@@ -5,12 +5,27 @@ import 'package:http/http.dart' as http;
 import 'package:dio/dio.dart';
 import '../models/chat_config.dart';
 
+/// Service class for making HTTP API calls to Frappe Chat endpoints.
+///
+/// This service handles all REST API interactions including:
+/// - Fetching message history
+/// - Sending messages
+/// - Uploading file attachments
+/// - Setting typing status
+///
+/// Authentication is handled automatically using the credentials provided in [config].
 class FrappeApiService {
+  /// The configuration containing server URL and authentication details.
   final FrappeChatConfig config;
+
   final Dio _dio = Dio();
 
+  /// Creates a new [FrappeApiService] with the given [config].
   FrappeApiService(this.config);
 
+  /// Returns HTTP headers with authentication credentials.
+  ///
+  /// Includes either API token or cookie-based authentication based on [config].
   Map<String, String> get _headers {
     final headers = <String, String>{'Accept': 'application/json'};
     if (config.apiKey != null && config.apiSecret != null) {
@@ -21,6 +36,12 @@ class FrappeApiService {
     return headers;
   }
 
+  /// Uploads a file to the Frappe server.
+  ///
+  /// The [file] is uploaded to the server and becomes accessible via a URL.
+  /// Returns the URL of the uploaded file which can be included in chat messages.
+  ///
+  /// Throws an [Exception] if the upload fails.
   Future<String> uploadFile(File file) async {
     String fileName = file.path.split('/').last;
 
@@ -57,6 +78,12 @@ class FrappeApiService {
     }
   }
 
+  /// Fetches all messages for a specific chat room.
+  ///
+  /// Retrieves the message history for the given [room] for the user identified by [email].
+  /// Returns a list of message data as JSON maps.
+  ///
+  /// Throws an [Exception] if the request fails.
   Future<List<dynamic>> getMessages(String room , String email) async {
     try {
       var url = Uri.parse(
@@ -82,6 +109,12 @@ class FrappeApiService {
     }
   }
 
+  /// Sends a text message to a chat room.
+  ///
+  /// Sends a message with the given [content] to the specified [room].
+  /// The message is attributed to the user identified by [sender] and [senderEmail].
+  ///
+  /// Throws an [Exception] if sending fails.
   Future<void> sendMessage(
     String room,
     String content,
@@ -109,6 +142,13 @@ class FrappeApiService {
     }
   }
 
+  /// Updates the typing status for a user in a chat room.
+  ///
+  /// Notifies the server that [user] is currently typing (or has stopped typing)
+  /// in the specified [room]. Set [isTyping] to true when the user starts typing
+  /// and false when they stop.
+  ///
+  /// This is typically called automatically by the chat UI.
   Future<void> setTyping(String room, String user, bool isTyping) async {
     try {
       var url = Uri.parse(

@@ -9,13 +9,53 @@ import '../widgets/message_bubble.dart';
 import '../widgets/attachment_sheet.dart';
 import '../widgets/audio_recorder.dart';
 
+/// A full-featured chat screen widget for Frappe Chat.
+///
+/// This widget provides a complete chat interface with:
+/// - Real-time message updates via WebSocket
+/// - Message history loading
+/// - Text message sending
+/// - File attachment support
+/// - Audio message recording
+/// - Typing indicators
+/// - Connection status indicator
+///
+/// Example usage:
+/// ```dart
+/// Navigator.push(
+///   context,
+///   MaterialPageRoute(
+///     builder: (context) => ChatScreen(
+///       config: frappeChatConfig,
+///       room: 'room-id-123',
+///       sender: 'john_doe',
+///       senderEmail: 'john@example.com',
+///       chatPartnerName: 'Jane Doe',
+///     ),
+///   ),
+/// );
+/// ```
 class ChatScreen extends StatefulWidget {
+  /// The configuration for connecting to the Frappe server.
   final FrappeChatConfig config;
+
+  /// The unique identifier of the chat room.
   final String room;
+
+  /// The username of the current user sending messages.
   final String sender;
+
+  /// The email address of the current user.
   final String senderEmail;
+
+  /// The display name of the chat partner (optional).
+  ///
+  /// If provided, this will be shown in the app bar. Otherwise, "Chat" is displayed.
   final String? chatPartnerName;
 
+  /// Creates a new [ChatScreen] widget.
+  ///
+  /// All parameters except [chatPartnerName] are required.
   const ChatScreen({
     Key? key,
     required this.config,
