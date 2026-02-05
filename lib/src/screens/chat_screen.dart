@@ -53,7 +53,10 @@ class _ChatScreenState extends State<ChatScreen> {
 
   void _loadMessages() async {
     try {
-      final messagesData = await _apiService.getMessages(widget.room);
+      final messagesData = await _apiService.getMessages(
+        widget.room,
+        widget.senderEmail,
+      );
       setState(() {
         _messages = messagesData.map((m) => ChatMessage.fromJson(m)).toList();
         _isLoading = false;
@@ -178,7 +181,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       final message = _messages[index];
                       // Frappe uses email or username for sender identification.
                       // We need to check both or standardize.
-                      bool isMe = message.senderEmail == widget.senderEmail ||
+                      bool isMe =
+                          message.senderEmail == widget.senderEmail ||
                           message.sender == widget.sender;
                       return MessageBubble(
                         message: message,

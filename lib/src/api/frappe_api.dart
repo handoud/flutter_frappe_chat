@@ -57,7 +57,7 @@ class FrappeApiService {
     }
   }
 
-  Future<List<dynamic>> getMessages(String room) async {
+  Future<List<dynamic>> getMessages(String room , String email) async {
     try {
       var url = Uri.parse(
         "${config.baseUrl}/api/method/chat.api.message.get_all",
@@ -65,7 +65,10 @@ class FrappeApiService {
       var response = await http.post(
         url,
         headers: _headers,
-        body: {'room': room},
+        body: {
+        'room': room,
+        'email': email
+        },
       );
 
       if (response.statusCode == 200) {

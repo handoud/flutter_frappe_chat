@@ -1,3 +1,6 @@
+## 0.1.3
+* Added email parameter to `getMessages` API call for better user-specific message retrieval.
+
 ## 0.1.2
 * Updated `permission_handler` to the latest version.
 * Improved error handling in API and WebSocket communication.
