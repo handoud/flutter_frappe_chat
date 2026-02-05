@@ -1,3 +1,7 @@
+## 0.1.2
+* Updated `permission_handler` to the latest version.
+* Improved error handling in API and WebSocket communication.
+
 ## 0.1.1
 * Fixed unused element warning in audio recorder.
 * Improved stability.
