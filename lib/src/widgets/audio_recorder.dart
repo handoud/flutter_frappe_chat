@@ -33,14 +33,6 @@ class _AudioRecorderState extends State<AudioRecorder> {
     super.dispose();
   }
 
-  Future<void> _toggleRecording() async {
-    if (_recorder!.isStopped) {
-      await _startRecording();
-    } else {
-      await _stopRecording();
-    }
-  }
-
   Future<void> _startRecording() async {
     // Permission check should be done before this widget is active or inside here
     var status = await Permission.microphone.request();

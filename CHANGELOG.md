@@ -1,3 +1,7 @@
+## 0.1.1
+* Fixed unused element warning in audio recorder.
+* Improved stability.
+
 ## 0.0.1
 
 * Initial release.

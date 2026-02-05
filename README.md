@@ -18,7 +18,7 @@ Add this package to your `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  flutter_frappe_chat: ^0.1.0
+  flutter_frappe_chat: ^0.1.1
 ```
 
 ## Usage
