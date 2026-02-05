@@ -26,13 +26,24 @@ dependencies:
 
 ### 1. Initialize Configuration
 
-Create a `FrappeChatConfig` object with your Frappe server details.
+You can use either API Key/Secret **OR** a Session Cookie (e.g., `sid`).
 
+**Option A: API Key & Secret**
 ```dart
 final config = FrappeChatConfig(
   baseUrl: "https://your-frappe-site.com",
   apiKey: "your_api_key",
   apiSecret: "your_api_secret",
+);
+```
+
+**Option B: Session Cookie (Recommended for Mobile Apps)**
+If you are logged in, simply pass the session ID (`sid`). The package will format it automatically.
+
+```dart
+final config = FrappeChatConfig(
+  baseUrl: "https://your-frappe-site.com",
+  sid: "YOUR_SESSION_ID",
 );
 ```
 

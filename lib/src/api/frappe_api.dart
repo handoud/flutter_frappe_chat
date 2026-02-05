@@ -15,6 +15,8 @@ class FrappeApiService {
     final headers = <String, String>{'Accept': 'application/json'};
     if (config.apiKey != null && config.apiSecret != null) {
       headers['Authorization'] = 'token ${config.apiKey}:${config.apiSecret}';
+    } else if (config.cookieHeader != null) {
+      headers['Cookie'] = config.cookieHeader!;
     }
     return headers;
   }

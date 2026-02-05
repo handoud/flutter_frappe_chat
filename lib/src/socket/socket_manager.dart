@@ -25,7 +25,9 @@ class FrappeSocketManager {
 
     socket.io.options?['extraHeaders'] = {
       if (config.apiKey != null && config.apiSecret != null)
-        'Authorization': 'token ${config.apiKey}:${config.apiSecret}',
+        'Authorization': 'token ${config.apiKey}:${config.apiSecret}'
+      else if (config.cookieHeader != null)
+        'Cookie': config.cookieHeader!
     };
 
     socket.connect();
