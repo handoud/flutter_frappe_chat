@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/chat_message.dart';
+import 'chat_audio_player.dart';
 
 class MessageBubble extends StatelessWidget {
   final ChatMessage message;
@@ -19,11 +20,9 @@ class MessageBubble extends StatelessWidget {
 
   String get fileUrl {
     if (message.content.startsWith('http')) return message.content;
-    // Ensure we don't double slash if baseUrl ends with /
     String cleanBase = baseUrl.endsWith('/')
         ? baseUrl.substring(0, baseUrl.length - 1)
         : baseUrl;
-    // Ensure content starts with / if it doesn't
     String cleanContent = message.content.startsWith('/')
         ? message.content
         : '/${message.content}';
@@ -38,40 +37,84 @@ class MessageBubble extends StatelessWidget {
         lower.endsWith('.gif');
   }
 
+  bool get isAudio {
+    final lower = message.content.toLowerCase();
+    return lower.endsWith('.aac') ||
+        lower.endsWith('.mp3') ||
+        lower.endsWith('.m4a') ||
+        lower.endsWith('.wav') ||
+        lower.endsWith('.ogg');
+  }
+
   bool get isPdf {
     return message.content.toLowerCase().endsWith('.pdf');
   }
 
   @override
   Widget build(BuildContext context) {
+    // WhatsApp Colors
+    final Color myColor = const Color(0xFFDCF8C6);
+    final Color otherColor = Colors.white;
+    const Radius radius = Radius.circular(12);
+
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
-        padding: const EdgeInsets.all(10),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
         decoration: BoxDecoration(
-          color: isMe ? Colors.blue[100] : Colors.grey[200],
-          borderRadius: BorderRadius.circular(12),
+          color: isMe ? myColor : otherColor,
+          borderRadius: BorderRadius.only(
+            topLeft: isMe ? radius : Radius.zero,
+            topRight: isMe ? Radius.zero : radius,
+            bottomLeft: radius,
+            bottomRight: radius,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.1),
+              blurRadius: 2,
+              offset: const Offset(0, 1),
+            )
+          ],
         ),
         constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.7,
+          maxWidth: MediaQuery.of(context).size.width * 0.75,
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (!isMe)
-              Text(
-                message.sender,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  fontSize: 12,
+              Padding(
+                padding: const EdgeInsets.only(bottom: 4.0),
+                child: Text(
+                  message.sender,
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                    color: Colors.orange[800],
+                  ),
                 ),
               ),
             if (isFile) _buildFileContent(context) else _buildTextContent(),
             const SizedBox(height: 4),
-            Text(
-              message.creation, // Todo: Format date
-              style: const TextStyle(fontSize: 10, color: Colors.grey),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                Text(
+                  message.creation, // Todo: Format date properly
+                  style: TextStyle(fontSize: 10, color: Colors.grey[600]),
+                ),
+                if (isMe) ...[
+                  const SizedBox(width: 4),
+                  Icon(
+                    message.seen ? Icons.done_all : Icons.done,
+                    size: 14,
+                    color: message.seen ? Colors.blue : Colors.grey[600],
+                  ),
+                ]
+              ],
             ),
           ],
         ),
@@ -93,6 +136,8 @@ class MessageBubble extends StatelessWidget {
           errorWidget: (context, url, error) => const Icon(Icons.error),
         ),
       );
+    } else if (isAudio) {
+      return ChatAudioPlayer(audioUrl: fileUrl, isMe: isMe);
     } else if (isPdf) {
       return GestureDetector(
         onTap: () => _launchUrl(fileUrl),
@@ -133,7 +178,6 @@ class MessageBubble extends StatelessWidget {
   void _launchUrl(String urlString) async {
     final Uri url = Uri.parse(urlString);
     if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-      // Handle error
       debugPrint('Could not launch $url');
     }
   }

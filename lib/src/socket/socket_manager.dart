@@ -15,21 +15,21 @@ import '../models/chat_message.dart';
 /// Example usage:
 /// ```dart
 /// final socketManager = FrappeSocketManager(config);
-/// 
+///
 /// socketManager.onMessageReceived = (message) {
 ///   print('New message: ${message.content}');
 /// };
-/// 
+///
 /// socketManager.onTypingChanged = (isTyping) {
 ///   print('User is typing: $isTyping');
 /// };
-/// 
+///
 /// socketManager.connect('room-id');
 /// ```
 class FrappeSocketManager {
   /// The Socket.IO connection instance.
-  late IO.Socket socket;
-  
+  IO.Socket? socket;
+
   /// The configuration containing server URL and authentication details.
   final FrappeChatConfig config;
 
@@ -37,29 +37,33 @@ class FrappeSocketManager {
   ///
   /// Set this to handle incoming chat messages in real-time.
   Function(ChatMessage)? onMessageReceived;
-  
+
   /// Callback invoked when typing status changes.
   ///
   /// Set this to update the UI when other users start or stop typing.
-  Function(bool)? onTypingChanged;
-  
+  /// Passes [isTyping] status and the [user] who is typing.
+  Function(bool, String)? onTypingChanged;
+
   /// Callback invoked when chat data is updated.
   ///
   /// Set this to handle general chat updates from the server.
   Function(Map<String, dynamic>)? onChatUpdate;
 
+  /// Callback invoked when a message is updated (e.g. marked as seen).
+  Function(ChatMessage)? onMessageUpdated;
+
   /// Creates a new [FrappeSocketManager] with the given [config].
   FrappeSocketManager(this.config);
 
-  /// Establishes a WebSocket connection to the Frappe server for the specified [room].
+  /// Establishes a WebSocket connection to the Frappe server.
   ///
-  /// This method:
-  /// 1. Creates a Socket.IO connection with authentication headers
-  /// 2. Connects to the server
-  /// 3. Sets up event listeners for messages, typing, and updates
-  ///
-  /// The connection is automatically authenticated using credentials from [config].
-  void connect(String room) {
+  /// If [room] is provided, it automatically subscribes to that room.
+  void connect({String? room}) {
+    if (socket?.connected == true) {
+      if (room != null) subscribeToRoom(room);
+      return;
+    }
+
     socket = IO.io(
       config.socketUrl,
       IO.OptionBuilder()
@@ -68,33 +72,38 @@ class FrappeSocketManager {
           .build(),
     );
 
-    socket.io.options?['extraHeaders'] = {
+    socket!.io.options?['extraHeaders'] = {
       if (config.apiKey != null && config.apiSecret != null)
         'Authorization': 'token ${config.apiKey}:${config.apiSecret}'
       else if (config.cookieHeader != null)
         'Cookie': config.cookieHeader!
     };
 
-    socket.connect();
+    socket!.connect();
 
-    socket.onConnect((_) {
+    socket!.onConnect((_) {
       debugPrint('Connected to Socket.IO');
-      _setupListeners(room);
+      if (room != null) {
+        subscribeToRoom(room);
+      }
     });
 
-    socket.onDisconnect((_) => debugPrint('Disconnected from Socket.IO'));
-    socket.onError((data) => debugPrint('Socket Error: $data'));
+    socket!.onDisconnect((_) => debugPrint('Disconnected from Socket.IO'));
+    socket!.onError((data) => debugPrint('Socket Error: $data'));
   }
 
-  /// Sets up event listeners for the specified [room].
-  ///
-  /// Listens for:
-  /// - New messages on the room channel
-  /// - Typing indicators on the "room:typing" channel
-  /// - General chat updates on "latest_chat_updates"
-  void _setupListeners(String room) {
+  /// Subscribes to a specific room's events.
+  void subscribeToRoom(String room) {
+    debugPrint("🔌 FrappeSocketManager: Subscribing to room: $room");
+    if (socket == null) {
+      debugPrint("⚠️ FrappeSocketManager: Socket is null, cannot subscribe.");
+      return;
+    }
+
     // Listen for new messages
-    socket.on(room, (data) {
+    socket!.on(room, (data) {
+      debugPrint(
+          "📩 FrappeSocketManager: Received event on room '$room': $data");
       if (data != null && onMessageReceived != null) {
         try {
           final message = ChatMessage.fromJson(Map<String, dynamic>.from(data));
@@ -106,17 +115,54 @@ class FrappeSocketManager {
     });
 
     // Listen for typing events
-    socket.on("$room:typing", (data) {
+    socket!.on("$room:typing", (data) {
       if (data != null && onTypingChanged != null) {
-        // data = { "room": room, "user": user, "is_typing": "false/true", ... }
-        // We can parse 'is_typing'
         bool isTyping = data['is_typing'].toString().toLowerCase() == 'true';
-        onTypingChanged!(isTyping);
+        String user = data['user']?.toString() ?? 'Unknown';
+        onTypingChanged!(isTyping, user);
       }
     });
 
-    // Listen for chat updates
-    socket.on("latest_chat_updates", (data) {
+    // Listen for message updates (e.g. read receipts)
+    // We listen to both 'doc_update' and custom 'message_update' just in case
+    void handleUpdate(data) {
+      debugPrint(
+          "📩 FrappeSocketManager: Received update on room '$room': $data");
+      if (data != null && onMessageUpdated != null) {
+        try {
+          // check if it's a Chat Message
+          if (data['doctype'] == 'Chat Message' || data['message'] != null) {
+            final msgData = data['doc'] ?? data['message'] ?? data;
+            final message =
+                ChatMessage.fromJson(Map<String, dynamic>.from(msgData));
+            onMessageUpdated!(message);
+          }
+        } catch (e) {
+          debugPrint("Error parsing message update: $e");
+        }
+      }
+    }
+
+    socket!.on("doc_update", handleUpdate);
+    socket!.on("message_update", handleUpdate);
+  }
+
+  /// Unsubscribes from a specific room.
+  void unsubscribeFromRoom(String room) {
+    debugPrint("Unsubscribing from room: $room");
+    socket?.off(room);
+    socket?.off("$room:typing");
+    socket?.off("doc_update");
+    socket?.off("message_update");
+  }
+
+  /// Sets up event listeners for the specified [room].
+  /// Kept for internal usage or backward compatibility if needed.
+  void _setupListeners(String room) {
+    subscribeToRoom(room);
+
+    // Listen for chat updates (Global?)
+    socket?.on("latest_chat_updates", (data) {
       if (data != null && onChatUpdate != null) {
         onChatUpdate!(Map<String, dynamic>.from(data));
       }
@@ -124,36 +170,32 @@ class FrappeSocketManager {
   }
 
   /// Sends a typing status update to the server.
-  ///
-  /// Emits a typing event for the specified [room] and [user].
-  /// Set [isTyping] to true when the user starts typing and false when they stop.
-  ///
-  /// Note: This emits a socket event. Depending on your Frappe configuration,
-  /// you might also need to call the REST API endpoint via [FrappeApiService.setTyping].
   void sendTyping(String room, String user, bool isTyping) {
-    if (socket.connected) {
-      socket.emit('doc_events', {
+    if (socket?.connected == true) {
+      socket!.emit('doc_events', {
         'doctype': 'Chat Room',
         'docname': room,
         'cmd': 'set_typing',
         'room': room,
         'user': user,
         'is_typing': isTyping,
-        'is_guest': false, // Todo: make configurable
       });
-      // Note: Frappe chat might expect a specific POST call to set_typing endpoint which then emits the event,
-      // OR it might listen to a socket event.
-      // Based on the python code `api/message.py`, `set_typing` is a whitelisted function.
-      // So we should probably call the API instead of emitting socket event directly if that's how it's designed.
-      // BUT, usually socket implementations allow emitting directly if configured.
-      // For now, we will add an API method for typing in the ApiService and call it from the UI or here.
     }
   }
 
   /// Disconnects the WebSocket connection.
-  ///
-  /// Call this when the chat screen is disposed to properly clean up resources.
   void disconnect() {
-    socket.disconnect();
+    socket?.disconnect();
+  }
+
+  /// Listens to ALL incoming events on the socket.
+  ///
+  /// This is useful for debugging or global filtering (e.g. tracking mentions).
+  /// [callback] receives the event name and the data payload.
+  void listenToAllEvents(Function(String event, dynamic data) callback) {
+    if (socket == null) return;
+    socket!.onAny((event, data) {
+      callback(event, data);
+    });
   }
 }

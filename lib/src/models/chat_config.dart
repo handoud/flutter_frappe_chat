@@ -61,12 +61,19 @@ class FrappeChatConfig {
     this.cookie,
     this.sid,
     this.verifyInsecure = false,
+    this.socketUrlOverride,
   });
+
+  /// Optional override for the WebSocket URL.
+  ///
+  /// If provided, this will be used instead of [baseUrl] for socket connections.
+  /// Useful when the socket server is on a different URL or path (e.g. "https://site.com/site_name").
+  final String? socketUrlOverride;
 
   /// Returns the WebSocket URL for real-time connections.
   ///
-  /// Currently returns the same as [baseUrl].
-  String get socketUrl => baseUrl;
+  /// Returns [socketUrlOverride] if set, otherwise [baseUrl].
+  String get socketUrl => socketUrlOverride ?? baseUrl;
 
   /// Returns the formatted cookie header string for HTTP requests.
   ///

@@ -44,35 +44,46 @@ class FrappeApiService {
   /// Throws an [Exception] if the upload fails.
   Future<String> uploadFile(File file) async {
     String fileName = file.path.split('/').last;
+    var url = Uri.parse("${config.baseUrl}/api/method/upload_file");
 
-    FormData formData = FormData.fromMap({
-      "file": await MultipartFile.fromFile(file.path, filename: fileName),
-      "is_private": 0,
-      "folder": "Home",
-      "doctype": "Chat Message",
-    });
+    var request = http.MultipartRequest('POST', url);
+
+    // Add Headers
+    request.headers.addAll(_headers);
+    // Explicitly remove Expect header if http client adds it, though usually safe
+    // request.headers.remove('Expect');
+
+    // Add Fields
+    // Add Fields
+    request.fields['filename'] = fileName;
+    request.fields['is_private'] = '0';
+    request.fields['from_form'] = '1';
+    // request.fields['folder'] = 'Home'; // Removed to avoid validation error
+    // request.fields['doctype'] = 'Chat Message'; // Removed: Cannot attach to non-existent doc
+
+    // Add File
+    var stream = http.ByteStream(file.openRead());
+    var length = await file.length();
+    var multipartFile = http.MultipartFile(
+      'file',
+      stream,
+      length,
+      filename: fileName,
+    );
+    request.files.add(multipartFile);
 
     try {
-      Response response = await _dio.post(
-        "${config.baseUrl}/api/method/upload_file",
-        data: formData,
-        options: Options(
-          headers: _headers,
-          validateStatus: (status) => status! < 500,
-        ),
-      );
+      var response = await request.send();
+      var responseString = await response.stream.bytesToString();
 
       if (response.statusCode == 200) {
-        var data = response.data;
-        if (data is String) {
-          data = jsonDecode(data);
-        }
-
+        var data = jsonDecode(responseString);
         if (data['message'] != null) {
           return data['message']['file_url'];
         }
       }
-      throw Exception("Failed to upload file: ${response.statusMessage}");
+      throw Exception(
+          "Failed to upload file: ${response.statusCode} - $responseString");
     } catch (e) {
       throw Exception("Error uploading file: $e");
     }
@@ -84,7 +95,7 @@ class FrappeApiService {
   /// Returns a list of message data as JSON maps.
   ///
   /// Throws an [Exception] if the request fails.
-  Future<List<dynamic>> getMessages(String room , String email) async {
+  Future<List<dynamic>> getMessages(String room, String email) async {
     try {
       var url = Uri.parse(
         "${config.baseUrl}/api/method/chat.api.message.get_all",
@@ -92,10 +103,7 @@ class FrappeApiService {
       var response = await http.post(
         url,
         headers: _headers,
-        body: {
-        'room': room,
-        'email': email
-        },
+        body: {'room': room, 'email': email},
       );
 
       if (response.statusCode == 200) {
@@ -166,6 +174,29 @@ class FrappeApiService {
       );
     } catch (e) {
       debugPrint("Error setting typing status: $e");
+    }
+  }
+
+  /// Marks a specific message as read/seen.
+  ///
+  /// Uses [frappe.client.set_value] to update the 'seen' status of the [ChatMessage].
+  Future<void> markMessageAsRead(String messageId) async {
+    try {
+      var url = Uri.parse(
+        "${config.baseUrl}/api/method/frappe.client.set_value",
+      );
+      await http.post(
+        url,
+        headers: _headers,
+        body: {
+          'doctype': 'Chat Message',
+          'name': messageId,
+          'fieldname': 'seen',
+          'value': '1',
+        },
+      );
+    } catch (e) {
+      debugPrint("Error marking message as read: $e");
     }
   }
 }

@@ -8,7 +8,7 @@ class AttachmentSheet extends StatelessWidget {
   final Function(File) onFileSelected;
 
   const AttachmentSheet({Key? key, required this.onFileSelected})
-    : super(key: key);
+      : super(key: key);
 
   Future<void> _pickImage(ImageSource source) async {
     // Check permissions if needed (camera usually handled by plugin or OS)
@@ -43,24 +43,27 @@ class AttachmentSheet extends StatelessWidget {
           ListTile(
             leading: const Icon(Icons.camera_alt),
             title: const Text('Camera'),
-            onTap: () {
+            onTap: () async {
               Navigator.pop(context);
+              await Future.delayed(const Duration(milliseconds: 500));
               _pickImage(ImageSource.camera);
             },
           ),
           ListTile(
             leading: const Icon(Icons.photo),
             title: const Text('Gallery'),
-            onTap: () {
+            onTap: () async {
               Navigator.pop(context);
+              await Future.delayed(const Duration(milliseconds: 500));
               _pickImage(ImageSource.gallery);
             },
           ),
           ListTile(
             leading: const Icon(Icons.attach_file),
             title: const Text('File'),
-            onTap: () {
+            onTap: () async {
               Navigator.pop(context);
+              await Future.delayed(const Duration(milliseconds: 500));
               _pickFile();
             },
           ),

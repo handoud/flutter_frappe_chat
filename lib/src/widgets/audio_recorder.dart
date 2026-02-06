@@ -62,13 +62,24 @@ class _AudioRecorderState extends State<AudioRecorder> {
     return GestureDetector(
       onLongPress: _startRecording,
       onLongPressUp: _stopRecording,
+      onTap: () {
+        if (_isRecording) {
+          _stopRecording();
+        } else {
+          _startRecording();
+        }
+      },
       child: Container(
-        padding: const EdgeInsets.all(10),
+        padding: const EdgeInsets.all(8),
         decoration: BoxDecoration(
-          color: _isRecording ? Colors.red : Colors.blue,
+          color: _isRecording ? Colors.red : Colors.transparent,
           shape: BoxShape.circle,
         ),
-        child: Icon(_isRecording ? Icons.stop : Icons.mic, color: Colors.white),
+        child: Icon(
+          _isRecording ? Icons.stop : Icons.mic,
+          color: _isRecording ? Colors.white : const Color(0xFF075E54),
+          size: 28,
+        ),
       ),
     );
   }
