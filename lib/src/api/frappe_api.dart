@@ -19,7 +19,6 @@ class FrappeApiService {
   /// The configuration containing server URL and authentication details.
   final FrappeChatConfig config;
 
-  final Dio _dio = Dio();
   final http.Client _client = getHttpClient();
 
   /// Creates a new [FrappeApiService] with the given [config].

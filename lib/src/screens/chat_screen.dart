@@ -8,7 +8,6 @@ import '../api/frappe_api.dart';
 import '../socket/socket_manager.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/attachment_sheet.dart';
-import '../widgets/audio_recorder.dart';
 import '../widgets/recording_input.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import '../widgets/typing_indicator.dart';
@@ -211,16 +210,6 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _isConnected = true);
   }
 
-  void _scrollToBottom() {
-    if (_scrollController.hasClients) {
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOut,
-      );
-    }
-  }
-
   Future<void> _playSound() async {
     // If no path is provided, do nothing or fallback
     if (widget.notificationSoundPath == null) return;
@@ -309,7 +298,8 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       extendBodyBehindAppBar: true,
       appBar: AppBar(
-        backgroundColor: Colors.white.withOpacity(0.8), // Transparent/Blurry
+        backgroundColor:
+            Colors.white.withValues(alpha: 0.8), // Transparent/Blurry
         elevation: 0,
         flexibleSpace: ClipRRect(
           child: BackdropFilter(
@@ -422,7 +412,7 @@ class _ChatScreenState extends State<ChatScreen> {
           borderRadius: BorderRadius.circular(25),
           boxShadow: [
             BoxShadow(
-              color: Colors.grey.withOpacity(0.2),
+              color: Colors.grey.withValues(alpha: 0.2),
               blurRadius: 4,
               offset: const Offset(0, 1),
             )
