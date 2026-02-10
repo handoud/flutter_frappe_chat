@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:dio/dio.dart';
 import '../models/chat_config.dart';
+import '../utils/http_client_helper.dart';
 
 /// Service class for making HTTP API calls to Frappe Chat endpoints.
 ///
@@ -19,6 +20,7 @@ class FrappeApiService {
   final FrappeChatConfig config;
 
   final Dio _dio = Dio();
+  final http.Client _client = getHttpClient();
 
   /// Creates a new [FrappeApiService] with the given [config].
   FrappeApiService(this.config);
@@ -30,9 +32,15 @@ class FrappeApiService {
     final headers = <String, String>{'Accept': 'application/json'};
     if (config.apiKey != null && config.apiSecret != null) {
       headers['Authorization'] = 'token ${config.apiKey}:${config.apiSecret}';
-    } else if (config.cookieHeader != null) {
+      // On Web, credentials are sent automatically via withCredentials=true
+      // We skip manual Cookie header to avoid conflicts
       headers['Cookie'] = config.cookieHeader!;
     }
+
+    if (config.csrfToken != null) {
+      headers['X-Frappe-CSRF-Token'] = config.csrfToken!;
+    }
+
     return headers;
   }
 
@@ -45,6 +53,12 @@ class FrappeApiService {
   Future<String> uploadFile(File file) async {
     String fileName = file.path.split('/').last;
     var url = Uri.parse("${config.baseUrl}/api/method/upload_file");
+
+    // MultipartRequest handles its own client logic usually, but to support credentials
+    // we might need to use _client.send. However, standard http.MultipartRequest
+    // doesn't easily allow setting a client.
+    // For web file upload with credentials, usage of BrowserClient is tricky with MultipartRequest directly
+    // unless we use _client.send(request).
 
     var request = http.MultipartRequest('POST', url);
 
@@ -73,7 +87,8 @@ class FrappeApiService {
     request.files.add(multipartFile);
 
     try {
-      var response = await request.send();
+      // Use _client.send instead of request.send() to use our configured client
+      var response = await _client.send(request);
       var responseString = await response.stream.bytesToString();
 
       if (response.statusCode == 200) {
@@ -100,7 +115,7 @@ class FrappeApiService {
       var url = Uri.parse(
         "${config.baseUrl}/api/method/chat.api.message.get_all",
       );
-      var response = await http.post(
+      var response = await _client.post(
         url,
         headers: _headers,
         body: {'room': room, 'email': email},
@@ -131,7 +146,7 @@ class FrappeApiService {
   ) async {
     try {
       var url = Uri.parse("${config.baseUrl}/api/method/chat.api.message.send");
-      var response = await http.post(
+      var response = await _client.post(
         url,
         headers: _headers,
         body: {
@@ -162,7 +177,7 @@ class FrappeApiService {
       var url = Uri.parse(
         "${config.baseUrl}/api/method/chat.api.message.set_typing",
       );
-      await http.post(
+      await _client.post(
         url,
         headers: _headers,
         body: {
@@ -185,7 +200,7 @@ class FrappeApiService {
       var url = Uri.parse(
         "${config.baseUrl}/api/method/frappe.client.set_value",
       );
-      await http.post(
+      await _client.post(
         url,
         headers: _headers,
         body: {

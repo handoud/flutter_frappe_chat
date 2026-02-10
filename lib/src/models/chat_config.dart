@@ -49,6 +49,9 @@ class FrappeChatConfig {
   /// Defaults to false for security.
   final bool verifyInsecure;
 
+  /// The CSRF token for web authentication (required if strict CSRF is enabled).
+  final String? csrfToken;
+
   /// Creates a new [FrappeChatConfig] instance.
   ///
   /// The [baseUrl] is required. For authentication, provide either:
@@ -62,6 +65,7 @@ class FrappeChatConfig {
     this.sid,
     this.verifyInsecure = false,
     this.socketUrlOverride,
+    this.csrfToken,
   });
 
   /// Optional override for the WebSocket URL.
