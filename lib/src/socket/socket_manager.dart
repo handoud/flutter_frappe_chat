@@ -156,19 +156,6 @@ class FrappeSocketManager {
     socket?.off("message_update");
   }
 
-  /// Sets up event listeners for the specified [room].
-  /// Kept for internal usage or backward compatibility if needed.
-  void _setupListeners(String room) {
-    subscribeToRoom(room);
-
-    // Listen for chat updates (Global?)
-    socket?.on("latest_chat_updates", (data) {
-      if (data != null && onChatUpdate != null) {
-        onChatUpdate!(Map<String, dynamic>.from(data));
-      }
-    });
-  }
-
   /// Sends a typing status update to the server.
   void sendTyping(String room, String user, bool isTyping) {
     if (socket?.connected == true) {

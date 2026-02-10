@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'dart:io';
 import 'package:http/http.dart' as http;
-import 'package:dio/dio.dart';
+
 import '../models/chat_config.dart';
 import '../utils/http_client_helper.dart';
 

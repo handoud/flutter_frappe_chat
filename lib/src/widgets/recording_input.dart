@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_sound/flutter_sound.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -21,8 +21,7 @@ class RecordingInput extends StatefulWidget {
 class _RecordingInputState extends State<RecordingInput>
     with SingleTickerProviderStateMixin {
   FlutterSoundRecorder? _recorder;
-  bool _isRecording = false;
-  String? _recordedPath;
+
   StreamSubscription? _recorderSubscription;
 
   // Timer
@@ -80,10 +79,6 @@ class _RecordingInputState extends State<RecordingInput>
           }
         });
       }
-    });
-
-    setState(() {
-      _isRecording = true;
     });
   }
 
