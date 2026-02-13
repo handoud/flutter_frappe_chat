@@ -31,8 +31,9 @@ class FrappeApiService {
     final headers = <String, String>{'Accept': 'application/json'};
     if (config.apiKey != null && config.apiSecret != null) {
       headers['Authorization'] = 'token ${config.apiKey}:${config.apiSecret}';
-      // On Web, credentials are sent automatically via withCredentials=true
-      // We skip manual Cookie header to avoid conflicts
+    }
+
+    if (config.cookieHeader != null) {
       headers['Cookie'] = config.cookieHeader!;
     }
 
@@ -117,14 +118,17 @@ class FrappeApiService {
       var response = await _client.post(
         url,
         headers: _headers,
-        body: {'room': room, 'email': email},
+        body: {'room': room, 'email': email, 'user': email},
       );
 
       if (response.statusCode == 200) {
         var data = jsonDecode(response.body);
         return data['message'] ?? [];
       } else {
-        throw Exception("Failed to fetch messages: ${response.statusCode}");
+        debugPrint(
+            "Failed to fetch messages: ${response.statusCode} - ${response.body}");
+        throw Exception(
+            "Failed to fetch messages: ${response.statusCode} - ${response.body}");
       }
     } catch (e) {
       throw Exception("Error fetching messages: $e");
