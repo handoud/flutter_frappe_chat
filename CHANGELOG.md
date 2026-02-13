@@ -1,5 +1,6 @@
-## 1.0.0
+## 1.0.1
 * **Stable Release**: First stable version of `flutter_frappe_chat`.
+## 1.0.0
 * **Enhanced Configuration**: Added support for `csrfToken`, `socketUrlOverride`, and `verifyInsecure` SSL options in `FrappeChatConfig`.
 * **Improved File Uploads**: Better handling of multipart requests with authentication headers.
 * **Updated Dependencies**: Upgraded `permission_handler` to v12.0.1 for better Android/iOS compatibility.

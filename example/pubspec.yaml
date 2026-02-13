@@ -2,7 +2,7 @@ name: frappe_chat_example
 description: Example app demonstrating flutter_frappe_chat package usage.
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.1+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
