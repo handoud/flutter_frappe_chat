@@ -1,188 +1,246 @@
 import 'package:flutter/foundation.dart';
-import 'package:socket_io_client/socket_io_client.dart' as IO;
+import 'package:socket_io_client/socket_io_client.dart' as io;
+
 import '../models/chat_config.dart';
 import '../models/chat_message.dart';
+import '../models/chat_theme.dart';
 
-/// Manages WebSocket connections to the Frappe Chat server for real-time updates.
+/// Maintains the Socket.IO connection to Frappe's realtime service.
 ///
-/// This class handles:
-/// - Establishing and maintaining WebSocket connections
-/// - Listening for incoming messages
-/// - Listening for typing indicators
-/// - Sending typing status updates
-/// - Handling connection lifecycle
+/// Frappe's realtime server is stricter than a plain Socket.IO server, and two
+/// of its checks reject a naive client outright:
 ///
-/// Example usage:
+/// * **The namespace must be the site name.** Handlers are registered on
+///   `io.of(/^\/.*$/)` and the auth middleware refuses anything else with
+///   `Invalid namespace`. [FrappeChatConfig.socketUrl] appends it for you.
+/// * **`Origin` must match `Host`.** Native Dart clients send no `Origin`
+///   header, so the middleware sees `undefined` and refuses with
+///   `Invalid origin`. This class sends one.
+///
+/// Both failures arrive on `connect_error`, which is surfaced through
+/// [connectionStatus] rather than being swallowed.
+///
 /// ```dart
-/// final socketManager = FrappeSocketManager(config);
+/// final socket = FrappeSocketManager(config)
+///   ..onMessageReceived = (message) => print(message.content);
 ///
-/// socketManager.onMessageReceived = (message) {
-///   print('New message: ${message.content}');
-/// };
+/// socket.connectionStatus.addListener(() {
+///   print(socket.connectionStatus.value);
+/// });
 ///
-/// socketManager.onTypingChanged = (isTyping) {
-///   print('User is typing: $isTyping');
-/// };
-///
-/// socketManager.connect('room-id');
+/// socket.connect(room: 'room-id');
 /// ```
 class FrappeSocketManager {
-  /// The Socket.IO connection instance.
-  IO.Socket? socket;
+  /// The underlying socket, exposed for advanced use.
+  io.Socket? socket;
 
-  /// The configuration containing server URL and authentication details.
+  /// Connection settings.
   final FrappeChatConfig config;
 
-  /// Callback invoked when a new message is received.
+  /// Called for each message received in the subscribed room.
+  void Function(ChatMessage message)? onMessageReceived;
+
+  /// Called when someone starts or stops typing. Receives the typing flag and
+  /// the user's display name.
+  void Function(bool isTyping, String user)? onTypingChanged;
+
+  /// Called for `latest_chat_updates`, which Frappe Chat publishes for room
+  /// list previews and unread badges.
+  void Function(Map<String, dynamic> update)? onChatUpdate;
+
+  /// The current realtime connection state, including the failure reason.
   ///
-  /// Set this to handle incoming chat messages in real-time.
-  Function(ChatMessage)? onMessageReceived;
+  /// Drive your connection indicator from this — never from the fact that
+  /// [connect] was called.
+  final ValueNotifier<ChatConnectionStatus> connectionStatus =
+      ValueNotifier(const ChatConnectionStatus(ChatConnectionState.disconnected));
 
-  /// Callback invoked when typing status changes.
-  ///
-  /// Set this to update the UI when other users start or stop typing.
-  /// Passes [isTyping] status and the [user] who is typing.
-  Function(bool, String)? onTypingChanged;
+  String? _room;
+  bool _disposed = false;
 
-  /// Callback invoked when chat data is updated.
-  ///
-  /// Set this to handle general chat updates from the server.
-  Function(Map<String, dynamic>)? onChatUpdate;
-
-  /// Callback invoked when a message is updated (e.g. marked as seen).
-  Function(ChatMessage)? onMessageUpdated;
-
-  /// Creates a new [FrappeSocketManager] with the given [config].
   FrappeSocketManager(this.config);
 
-  /// Establishes a WebSocket connection to the Frappe server.
+  /// Whether the socket is currently connected.
+  bool get isConnected => socket?.connected == true;
+
+  /// Connects and, when [room] is given, subscribes to it.
   ///
-  /// If [room] is provided, it automatically subscribes to that room.
+  /// Safe to call repeatedly: an existing connection is reused and only the
+  /// room subscription is refreshed.
   void connect({String? room}) {
-    if (socket?.connected == true) {
-      if (room != null) subscribeToRoom(room);
+    if (_disposed) return;
+    _room = room ?? _room;
+
+    if (socket != null) {
+      if (isConnected && _room != null) _subscribe(_room!);
       return;
     }
 
-    socket = IO.io(
+    connectionStatus.value =
+        const ChatConnectionStatus(ChatConnectionState.connecting);
+
+    final headers = <String, String>{
+      // Frappe compares Origin against Host and refuses a mismatch. A native
+      // client sends neither, so both must be set explicitly.
+      'Origin': config.origin,
+      // Needed by multi-tenant benches to resolve the site before auth runs.
+      'x-frappe-site-name': config.resolvedSiteName,
+      ...config.authHeaders,
+    };
+
+    socket = io.io(
       config.socketUrl,
-      IO.OptionBuilder()
+      io.OptionBuilder()
           .setTransports(['websocket'])
+          .setExtraHeaders(headers)
+          .enableReconnection()
+          .setReconnectionDelay(1000)
+          .setReconnectionDelayMax(10000)
           .disableAutoConnect()
           .build(),
     );
 
-    socket!.io.options?['extraHeaders'] = {
-      if (config.apiKey != null && config.apiSecret != null)
-        'Authorization': 'token ${config.apiKey}:${config.apiSecret}'
-      else if (config.cookieHeader != null)
-        'Cookie': config.cookieHeader!
-    };
+    socket!
+      ..onConnect((_) {
+        debugPrint('flutter_frappe_chat: connected to ${config.socketUrl}');
+        connectionStatus.value =
+            const ChatConnectionStatus(ChatConnectionState.connected);
+        if (_room != null) _subscribe(_room!);
+      })
+      ..onDisconnect((_) {
+        connectionStatus.value =
+            const ChatConnectionStatus(ChatConnectionState.disconnected);
+      })
+      ..onConnectError(_handleConnectError)
+      ..onError(_handleConnectError);
 
     socket!.connect();
-
-    socket!.onConnect((_) {
-      debugPrint('Connected to Socket.IO');
-      if (room != null) {
-        subscribeToRoom(room);
-      }
-    });
-
-    socket!.onDisconnect((_) => debugPrint('Disconnected from Socket.IO'));
-    socket!.onError((data) => debugPrint('Socket Error: $data'));
   }
 
-  /// Subscribes to a specific room's events.
+  void _handleConnectError(dynamic error) {
+    final reason = _describe(error);
+    debugPrint('flutter_frappe_chat: connection failed — $reason');
+
+    if (reason.contains('Invalid namespace')) {
+      debugPrint(
+        'flutter_frappe_chat: the Socket.IO namespace must equal the Frappe '
+        'site name. Connecting to "${config.socketUrl}". If the site name '
+        'differs from the host, set FrappeChatConfig.siteName.',
+      );
+    } else if (reason.contains('Invalid origin')) {
+      debugPrint(
+        'flutter_frappe_chat: Frappe rejected the Origin header '
+        '"${config.origin}". It must match the host serving the realtime '
+        'service.',
+      );
+    } else if (reason.contains('Unauthorized')) {
+      debugPrint(
+        'flutter_frappe_chat: authentication failed. Check the sid or the '
+        'API key and secret.',
+      );
+    }
+
+    connectionStatus.value =
+        ChatConnectionStatus(ChatConnectionState.failed, reason);
+  }
+
+  static String _describe(dynamic error) {
+    if (error == null) return 'unknown error';
+    if (error is Map) return error['message']?.toString() ?? error.toString();
+    return error.toString();
+  }
+
+  /// Subscribes to a room, replacing any previous subscription.
   void subscribeToRoom(String room) {
-    debugPrint("🔌 FrappeSocketManager: Subscribing to room: $room");
+    _room = room;
     if (socket == null) {
-      debugPrint("⚠️ FrappeSocketManager: Socket is null, cannot subscribe.");
+      debugPrint('flutter_frappe_chat: not connected; call connect() first');
       return;
     }
+    _subscribe(room);
+  }
 
-    // Listen for new messages
+  void _subscribe(String room) {
+    // Socket.IO's `on` appends listeners rather than replacing them, and
+    // onConnect fires again after every automatic reconnect. Without this
+    // removal each reconnect would duplicate every incoming message.
+    _removeListeners(room);
+
     socket!.on(room, (data) {
-      debugPrint(
-          "📩 FrappeSocketManager: Received event on room '$room': $data");
-      if (data != null && onMessageReceived != null) {
-        try {
-          final message = ChatMessage.fromJson(Map<String, dynamic>.from(data));
-          onMessageReceived!(message);
-        } catch (e) {
-          debugPrint("Error parsing message: $e");
-        }
+      if (data == null || onMessageReceived == null) return;
+      try {
+        onMessageReceived!(ChatMessage.fromJson(data));
+      } catch (e) {
+        debugPrint('flutter_frappe_chat: could not parse message — $e');
       }
     });
 
-    // Listen for typing events
-    socket!.on("$room:typing", (data) {
-      if (data != null && onTypingChanged != null) {
-        bool isTyping = data['is_typing'].toString().toLowerCase() == 'true';
-        String user = data['user']?.toString() ?? 'Unknown';
-        onTypingChanged!(isTyping, user);
-      }
+    socket!.on('$room:typing', (data) {
+      if (data is! Map || onTypingChanged == null) return;
+      final isTyping = data['is_typing'].toString().toLowerCase() == 'true';
+      onTypingChanged!(isTyping, data['user']?.toString() ?? 'Someone');
     });
 
-    // Listen for message updates (e.g. read receipts)
-    // We listen to both 'doc_update' and custom 'message_update' just in case
-    void handleUpdate(data) {
-      debugPrint(
-          "📩 FrappeSocketManager: Received update on room '$room': $data");
-      if (data != null && onMessageUpdated != null) {
-        try {
-          // check if it's a Chat Message
-          if (data['doctype'] == 'Chat Message' || data['message'] != null) {
-            final msgData = data['doc'] ?? data['message'] ?? data;
-            final message =
-                ChatMessage.fromJson(Map<String, dynamic>.from(msgData));
-            onMessageUpdated!(message);
-          }
-        } catch (e) {
-          debugPrint("Error parsing message update: $e");
-        }
-      }
-    }
-
-    socket!.on("doc_update", handleUpdate);
-    socket!.on("message_update", handleUpdate);
+    socket!.on('latest_chat_updates', (data) {
+      if (data is! Map || onChatUpdate == null) return;
+      onChatUpdate!(Map<String, dynamic>.from(data));
+    });
   }
 
-  /// Unsubscribes from a specific room.
-  void unsubscribeFromRoom(String room) {
-    debugPrint("Unsubscribing from room: $room");
+  void _removeListeners(String room) {
     socket?.off(room);
-    socket?.off("$room:typing");
-    socket?.off("doc_update");
-    socket?.off("message_update");
+    socket?.off('$room:typing');
+    socket?.off('latest_chat_updates');
   }
 
-  /// Sends a typing status update to the server.
-  void sendTyping(String room, String user, bool isTyping) {
-    if (socket?.connected == true) {
-      socket!.emit('doc_events', {
-        'doctype': 'Chat Room',
-        'docname': room,
-        'cmd': 'set_typing',
-        'room': room,
-        'user': user,
-        'is_typing': isTyping,
-      });
-    }
+  /// Unsubscribes from a room.
+  void unsubscribeFromRoom(String room) {
+    _removeListeners(room);
+    if (_room == room) _room = null;
   }
 
-  /// Disconnects the WebSocket connection.
-  void disconnect() {
-    socket?.disconnect();
-  }
-
-  /// Listens to ALL incoming events on the socket.
+  /// Subscribes to realtime updates for a specific document.
   ///
-  /// This is useful for debugging or global filtering (e.g. tracking mentions).
-  /// [callback] receives the event name and the data payload.
-  void listenToAllEvents(Function(String event, dynamic data) callback) {
-    if (socket == null) return;
-    socket!.onAny((event, data) {
-      callback(event, data);
-    });
+  /// Frappe only delivers `doc_update` events to subscribers of that document's
+  /// room, so this call is required before such events arrive.
+  void subscribeToDoc(String doctype, String docname) {
+    socket?.emit('doc_subscribe', [doctype, docname]);
+  }
+
+  /// Unsubscribes from a document's updates.
+  void unsubscribeFromDoc(String doctype, String docname) {
+    socket?.emit('doc_unsubscribe', [doctype, docname]);
+  }
+
+  /// Listens to every event, for debugging.
+  void listenToAllEvents(void Function(String event, dynamic data) callback) {
+    socket?.onAny((event, data) => callback(event, data));
+  }
+
+  /// Disconnects without tearing down the manager.
+  void disconnect() {
+    if (_room != null) _removeListeners(_room!);
+    socket?.disconnect();
+    connectionStatus.value =
+        const ChatConnectionStatus(ChatConnectionState.disconnected);
+  }
+
+  /// Releases the socket and every listener.
+  ///
+  /// Always call this from your widget's `dispose`: without it the callbacks
+  /// keep the disposed State object alive.
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+
+    onMessageReceived = null;
+    onTypingChanged = null;
+    onChatUpdate = null;
+
+    if (_room != null) _removeListeners(_room!);
+    socket?.dispose();
+    socket = null;
+
+    connectionStatus.dispose();
   }
 }

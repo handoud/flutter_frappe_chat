@@ -1,101 +1,110 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_sound/flutter_sound.dart';
-import 'package:permission_handler/permission_handler.dart';
 
+import '../models/chat_theme.dart';
+import '../utils/permissions.dart';
+
+/// The input bar shown while a voice note is being recorded.
 class RecordingInput extends StatefulWidget {
-  final Function(String path) onStop;
+  /// Called with the recorded file's path when the user sends it.
+  final void Function(String path) onStop;
+
+  /// Called when the user discards the recording, or it could not start.
   final VoidCallback onCancel;
 
+  /// Colours and shapes.
+  final FrappeChatTheme theme;
+
   const RecordingInput({
-    Key? key,
+    super.key,
     required this.onStop,
     required this.onCancel,
-  }) : super(key: key);
+    this.theme = const FrappeChatTheme(),
+  });
 
   @override
-  _RecordingInputState createState() => _RecordingInputState();
+  State<RecordingInput> createState() => _RecordingInputState();
 }
 
-class _RecordingInputState extends State<RecordingInput>
-    with SingleTickerProviderStateMixin {
-  FlutterSoundRecorder? _recorder;
+class _RecordingInputState extends State<RecordingInput> {
+  static const _fileName = 'frappe_chat_voice_note.aac';
 
-  StreamSubscription? _recorderSubscription;
+  final FlutterSoundRecorder _recorder = FlutterSoundRecorder();
+  final Stopwatch _stopwatch = Stopwatch();
+  final List<double> _levels = [];
 
-  // Timer
-  Stopwatch _stopwatch = Stopwatch();
-  Timer? _timer;
-  String _durationText = "0:00";
-
-  // Waveform
-  List<double> _waveforms = [];
+  StreamSubscription<RecordingDisposition>? _progress;
+  Timer? _ticker;
+  String _elapsed = '0:00';
+  bool _opened = false;
 
   @override
   void initState() {
     super.initState();
-    _recorder = FlutterSoundRecorder();
-    _initAndStart();
+    _start();
   }
 
-  Future<void> _initAndStart() async {
-    await _recorder!.openRecorder();
-    _recorder!.setSubscriptionDuration(const Duration(milliseconds: 50));
-
-    // Check perm again just in case (should be checked by parent or before this widget shows)
-    var status = await Permission.microphone.status;
-    if (!status.isGranted) {
-      status = await Permission.microphone.request();
-      if (!status.isGranted) {
-        widget.onCancel();
-        return;
-      }
+  Future<void> _start() async {
+    if (!await ChatPermissions.requestMicrophone()) {
+      widget.onCancel();
+      return;
     }
 
-    await _recorder!.startRecorder(toFile: 'audio_message.aac');
+    try {
+      await _recorder.openRecorder();
+      _opened = true;
+      await _recorder.setSubscriptionDuration(
+        const Duration(milliseconds: 80),
+      );
+
+      await _recorder.startRecorder(toFile: _fileName, codec: Codec.aacADTS);
+    } catch (e) {
+      debugPrint('flutter_frappe_chat: could not start recording — $e');
+      widget.onCancel();
+      return;
+    }
 
     _stopwatch.start();
-    _timer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+    _ticker = Timer.periodic(const Duration(milliseconds: 200), (_) {
       if (!mounted) return;
+      setState(() => _elapsed = _format(_stopwatch.elapsed));
+    });
+
+    _progress = _recorder.onProgress?.listen((event) {
+      final decibels = event.decibels;
+      if (decibels == null || !mounted) return;
+
       setState(() {
-        _durationText = _formatDuration(_stopwatch.elapsed);
+        // Decibels run roughly -60 (silence) to 0 (loud).
+        final normalized = (1 + decibels / 60).clamp(0.08, 1.0).toDouble();
+        _levels.add(normalized);
+        if (_levels.length > 60) _levels.removeAt(0);
       });
     });
-
-    _recorderSubscription = _recorder!.onProgress!.listen((e) {
-      if (e.decibels != null) {
-        setState(() {
-          // Normalize db (usually -160 to 0) to 0.0 - 1.0
-          // Typical speech is around -30 to -50db
-          // Let's take a range of -60 to 0
-          double normalized = 1 - (e.decibels! / -60).clamp(0.0, 1.0);
-          // Add some randomness/noise to make it look alive if silence
-          if (normalized < 0.1) normalized = 0.1;
-
-          _waveforms.add(normalized);
-          if (_waveforms.length > 50) {
-            _waveforms.removeAt(0);
-          }
-        });
-      }
-    });
   }
 
-  String _formatDuration(Duration d) {
-    String minutes = d.inMinutes.toString();
-    String seconds = (d.inSeconds % 60).toString().padLeft(2, '0');
-    return "$minutes:$seconds";
-  }
+  static String _format(Duration d) =>
+      '${d.inMinutes}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
 
-  Future<void> _stopAndSend() async {
+  Future<String?> _stopRecorder() async {
     _stopwatch.stop();
-    _timer?.cancel();
-    _recorderSubscription?.cancel();
+    _ticker?.cancel();
+    await _progress?.cancel();
+    _progress = null;
 
-    final path = await _recorder!.stopRecorder();
+    if (!_opened) return null;
+    try {
+      return await _recorder.stopRecorder();
+    } catch (e) {
+      debugPrint('flutter_frappe_chat: could not stop recording — $e');
+      return null;
+    }
+  }
 
-    if (path != null) {
+  Future<void> _send() async {
+    final path = await _stopRecorder();
+    if (path != null && _stopwatch.elapsed.inMilliseconds > 500) {
       widget.onStop(path);
     } else {
       widget.onCancel();
@@ -103,77 +112,63 @@ class _RecordingInputState extends State<RecordingInput>
   }
 
   Future<void> _cancel() async {
+    await _stopRecorder();
     try {
-      _stopwatch.stop();
-      _timer?.cancel();
-      _recorderSubscription?.cancel();
-      await _recorder!.stopRecorder();
-      await _recorder!.deleteRecord(fileName: 'audio_message.aac');
-    } catch (e) {
-      debugPrint("Error cancelling recording: $e");
-    } finally {
-      widget.onCancel();
+      if (_opened) await _recorder.deleteRecord(fileName: _fileName);
+    } catch (_) {
+      // The file may not exist yet; discarding is best effort.
     }
+    widget.onCancel();
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
-    _recorder!.closeRecorder();
-    _recorderSubscription?.cancel();
+    _ticker?.cancel();
+    _progress?.cancel();
+    if (_opened) _recorder.closeRecorder();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final theme = widget.theme;
+
     return SafeArea(
       top: false,
-      bottom: true, // Handle safe area for bottom devices
       child: Container(
-        height: 60, // Match typical input height
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        color: Colors.white,
+        height: 60,
+        padding: const EdgeInsets.symmetric(horizontal: 12),
+        color: theme.inputBackground,
         child: Row(
           children: [
-            // Duration
+            Icon(Icons.fiber_manual_record, color: Colors.red[400], size: 12),
+            const SizedBox(width: 8),
             Text(
-              _durationText,
-              style: const TextStyle(
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                fontFeatures: [
-                  FontFeature.tabularFigures()
-                ], // Fixed width numbers
+              _elapsed,
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: theme.incomingText,
+                fontFeatures: const [FontFeature.tabularFigures()],
               ),
             ),
-            const SizedBox(width: 16),
-
-            // Waveform
+            const SizedBox(width: 12),
             Expanded(
               child: CustomPaint(
-                painter: WaveformPainter(_waveforms),
+                painter: _WaveformPainter(_levels, theme.metaColor),
                 size: const Size(double.infinity, 30),
               ),
             ),
-            const SizedBox(width: 16),
-
-            // Delete
             IconButton(
-              icon: const Icon(Icons.delete_outline,
-                  color: Colors.grey, size: 28),
+              tooltip: 'Discard',
+              icon: Icon(Icons.delete_outline, color: theme.metaColor),
               onPressed: _cancel,
             ),
-
-            const SizedBox(width: 8),
-
-            // Send Button
-            GestureDetector(
-              onTap: _stopAndSend,
-              child: const CircleAvatar(
-                backgroundColor: Color(0xFF075E54),
-                radius: 20,
-                child: Icon(Icons.send, color: Colors.white, size: 20),
-              ),
+            IconButton.filled(
+              tooltip: 'Send',
+              style: IconButton.styleFrom(backgroundColor: theme.accent),
+              icon: const Icon(Icons.send, size: 18),
+              onPressed: _send,
             ),
           ],
         ),
@@ -182,34 +177,36 @@ class _RecordingInputState extends State<RecordingInput>
   }
 }
 
-class WaveformPainter extends CustomPainter {
-  final List<double> waveforms;
+class _WaveformPainter extends CustomPainter {
+  final List<double> levels;
+  final Color color;
 
-  WaveformPainter(this.waveforms);
+  const _WaveformPainter(this.levels, this.color);
 
   @override
   void paint(Canvas canvas, Size size) {
+    if (levels.isEmpty) return;
+
     final paint = Paint()
-      ..color = Colors.grey
+      ..color = color
       ..strokeWidth = 2
       ..strokeCap = StrokeCap.round;
 
-    double spacing = size.width / 50; // Show 50 bars
+    const barCount = 60;
+    final spacing = size.width / barCount;
 
-    for (int i = 0; i < waveforms.length; i++) {
-      double height = waveforms[i] * size.height;
-      double x = size.width - ((waveforms.length - i) * spacing);
-
+    for (var i = 0; i < levels.length; i++) {
+      final x = size.width - (levels.length - i) * spacing;
       if (x < 0) continue;
 
-      // Draw centered vertically
-      double startY = (size.height - height) / 2;
-      canvas.drawLine(Offset(x, startY), Offset(x, startY + height), paint);
+      final height = levels[i] * size.height;
+      final top = (size.height - height) / 2;
+      canvas.drawLine(Offset(x, top), Offset(x, top + height), paint);
     }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) {
-    return true;
-  }
+  bool shouldRepaint(_WaveformPainter oldDelegate) =>
+      oldDelegate.levels.length != levels.length ||
+      oldDelegate.color != color;
 }

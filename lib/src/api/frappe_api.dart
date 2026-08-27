@@ -1,146 +1,144 @@
+import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
-import 'dart:io';
 import 'package:http/http.dart' as http;
 
 import '../models/chat_config.dart';
-import '../utils/http_client_helper.dart';
 
-/// Service class for making HTTP API calls to Frappe Chat endpoints.
+/// HTTP calls against the Frappe Chat API.
 ///
-/// This service handles all REST API interactions including:
-/// - Fetching message history
-/// - Sending messages
-/// - Uploading file attachments
-/// - Setting typing status
-///
-/// Authentication is handled automatically using the credentials provided in [config].
+/// Endpoints come from the [frappe/chat](https://github.com/frappe/chat) app:
+/// `chat.api.message.get_all`, `.send`, `.set_typing` and `.mark_as_read`.
 class FrappeApiService {
-  /// The configuration containing server URL and authentication details.
+  /// Connection settings.
   final FrappeChatConfig config;
 
-  final http.Client _client = getHttpClient();
+  final http.Client _client;
+  final bool _ownsClient;
 
-  /// Creates a new [FrappeApiService] with the given [config].
-  FrappeApiService(this.config);
+  FrappeApiService(this.config, {http.Client? client})
+      : _client = client ?? http.Client(),
+        _ownsClient = client == null;
 
-  /// Returns HTTP headers with authentication credentials.
-  ///
-  /// Includes either API token or cookie-based authentication based on [config].
-  Map<String, String> get _headers {
-    final headers = <String, String>{'Accept': 'application/json'};
-    if (config.apiKey != null && config.apiSecret != null) {
-      headers['Authorization'] = 'token ${config.apiKey}:${config.apiSecret}';
+  Map<String, String> get _headers => {
+        'Accept': 'application/json',
+        ...config.authHeaders,
+      };
+
+  Uri _uri(String method) => Uri.parse('${config.baseUrl}/api/method/$method');
+
+  /// Extracts the message Frappe meant for the user out of an error body.
+  static String _errorMessage(http.Response response) {
+    try {
+      final data = jsonDecode(response.body);
+      if (data is Map) {
+        final raw = data['_server_messages'];
+        if (raw != null) {
+          final messages = raw is String ? jsonDecode(raw) : raw;
+          if (messages is List && messages.isNotEmpty) {
+            final first = messages.first;
+            final decoded = first is String ? jsonDecode(first) : first;
+            if (decoded is Map && decoded['message'] != null) {
+              return decoded['message']
+                  .toString()
+                  .replaceAll(RegExp(r'<[^>]+>'), '')
+                  .trim();
+            }
+          }
+        }
+        final message = data['message'];
+        if (message is String && message.isNotEmpty) return message;
+        final excType = data['exc_type'];
+        if (excType is String && excType.isNotEmpty) return excType;
+      }
+    } catch (_) {
+      // Not a Frappe JSON error; fall through.
     }
-
-    if (config.cookieHeader != null) {
-      headers['Cookie'] = config.cookieHeader!;
-    }
-
-    if (config.csrfToken != null) {
-      headers['X-Frappe-CSRF-Token'] = config.csrfToken!;
-    }
-
-    return headers;
+    return 'HTTP ${response.statusCode}';
   }
 
-  /// Uploads a file to the Frappe server.
+  Future<http.Response> _post(String method, Map<String, String> body) {
+    return _client
+        .post(_uri(method), headers: _headers, body: body)
+        .timeout(config.timeout);
+  }
+
+  /// Loads a page of messages for [room].
   ///
-  /// The [file] is uploaded to the server and becomes accessible via a URL.
-  /// Returns the URL of the uploaded file which can be included in chat messages.
+  /// [limitStart] and [limitPageLength] are sent, but the stock
+  /// `chat.api.message.get_all` accepts neither and returns the **entire** room
+  /// history — Frappe drops unknown arguments silently. To get real pagination,
+  /// override the method in a custom app:
   ///
-  /// Throws an [Exception] if the upload fails.
-  Future<String> uploadFile(File file) async {
-    String fileName = file.path.split('/').last;
-    var url = Uri.parse("${config.baseUrl}/api/method/upload_file");
-
-    // MultipartRequest handles its own client logic usually, but to support credentials
-    // we might need to use _client.send. However, standard http.MultipartRequest
-    // doesn't easily allow setting a client.
-    // For web file upload with credentials, usage of BrowserClient is tricky with MultipartRequest directly
-    // unless we use _client.send(request).
-
-    var request = http.MultipartRequest('POST', url);
-
-    // Add Headers
-    request.headers.addAll(_headers);
-    // Explicitly remove Expect header if http client adds it, though usually safe
-    // request.headers.remove('Expect');
-
-    // Add Fields
-    // Add Fields
-    request.fields['filename'] = fileName;
-    request.fields['is_private'] = '0';
-    request.fields['from_form'] = '1';
-    // request.fields['folder'] = 'Home'; // Removed to avoid validation error
-    // request.fields['doctype'] = 'Chat Message'; // Removed: Cannot attach to non-existent doc
-
-    // Add File
-    var stream = http.ByteStream(file.openRead());
-    var length = await file.length();
-    var multipartFile = http.MultipartFile(
-      'file',
-      stream,
-      length,
-      filename: fileName,
-    );
-    request.files.add(multipartFile);
-
+  /// ```python
+  /// @frappe.whitelist()
+  /// def get_all(room, email, limit_start=0, limit_page_length=50):
+  ///     if not is_user_allowed_in_room(room, email):
+  ///         raise_not_authorized_error()
+  ///     return frappe.get_all(
+  ///         "Chat Message",
+  ///         filters={"room": room},
+  ///         fields=["name", "content", "sender", "creation", "sender_email"],
+  ///         order_by="creation desc",
+  ///         limit_start=int(limit_start),
+  ///         limit_page_length=int(limit_page_length),
+  ///     )
+  /// ```
+  ///
+  /// Returns messages oldest first.
+  Future<List<dynamic>> getMessages(
+    String room,
+    String email, {
+    int limitStart = 0,
+    int? limitPageLength,
+  }) async {
     try {
-      // Use _client.send instead of request.send() to use our configured client
-      var response = await _client.send(request);
-      var responseString = await response.stream.bytesToString();
+      final response = await _post('chat.api.message.get_all', {
+        'room': room,
+        'email': email,
+        'limit_start': limitStart.toString(),
+        'limit_page_length': (limitPageLength ?? config.pageSize).toString(),
+      });
 
-      if (response.statusCode == 200) {
-        var data = jsonDecode(responseString);
-        if (data['message'] != null) {
-          return data['message']['file_url'];
+      if (response.statusCode != 200) {
+        throw FrappeChatException(
+          'Could not load messages: ${_errorMessage(response)}',
+          statusCode: response.statusCode,
+        );
+      }
+
+      final data = jsonDecode(response.body);
+      final messages = data is Map ? data['message'] : null;
+      if (messages is! List) return const [];
+
+      // A paginated server returns newest first; the stock one returns oldest
+      // first. Normalise to oldest first so the list renders consistently.
+      if (messages.length > 1) {
+        final first = DateTime.tryParse(
+          (messages.first is Map ? messages.first['creation'] : null)
+                  ?.toString() ??
+              '',
+        );
+        final last = DateTime.tryParse(
+          (messages.last is Map ? messages.last['creation'] : null)
+                  ?.toString() ??
+              '',
+        );
+        if (first != null && last != null && first.isAfter(last)) {
+          return messages.reversed.toList();
         }
       }
-      throw Exception(
-          "Failed to upload file: ${response.statusCode} - $responseString");
-    } catch (e) {
-      throw Exception("Error uploading file: $e");
+      return messages;
+    } on TimeoutException {
+      throw const FrappeChatException('Loading messages timed out');
     }
   }
 
-  /// Fetches all messages for a specific chat room.
+  /// Sends a text message.
   ///
-  /// Retrieves the message history for the given [room] for the user identified by [email].
-  /// Returns a list of message data as JSON maps.
-  ///
-  /// Throws an [Exception] if the request fails.
-  Future<List<dynamic>> getMessages(String room, String email) async {
-    try {
-      var url = Uri.parse(
-        "${config.baseUrl}/api/method/chat.api.message.get_all",
-      );
-      var response = await _client.post(
-        url,
-        headers: _headers,
-        body: {'room': room, 'email': email, 'user': email},
-      );
-
-      if (response.statusCode == 200) {
-        var data = jsonDecode(response.body);
-        return data['message'] ?? [];
-      } else {
-        debugPrint(
-            "Failed to fetch messages: ${response.statusCode} - ${response.body}");
-        throw Exception(
-            "Failed to fetch messages: ${response.statusCode} - ${response.body}");
-      }
-    } catch (e) {
-      throw Exception("Error fetching messages: $e");
-    }
-  }
-
-  /// Sends a text message to a chat room.
-  ///
-  /// Sends a message with the given [content] to the specified [room].
-  /// The message is attributed to the user identified by [sender] and [senderEmail].
-  ///
-  /// Throws an [Exception] if sending fails.
+  /// The server echoes it back over the socket, so do not add it to the list
+  /// yourself unless you are doing optimistic rendering.
   Future<void> sendMessage(
     String room,
     String content,
@@ -148,73 +146,112 @@ class FrappeApiService {
     String senderEmail,
   ) async {
     try {
-      var url = Uri.parse("${config.baseUrl}/api/method/chat.api.message.send");
-      var response = await _client.post(
-        url,
-        headers: _headers,
-        body: {
-          'room': room,
-          'content': content,
-          'user': sender,
-          'email': senderEmail,
-        },
-      );
+      final response = await _post('chat.api.message.send', {
+        'room': room,
+        'content': content,
+        'user': sender,
+        'email': senderEmail,
+      });
 
       if (response.statusCode != 200) {
-        throw Exception("Failed to send message: ${response.body}");
+        throw FrappeChatException(
+          'Could not send message: ${_errorMessage(response)}',
+          statusCode: response.statusCode,
+        );
       }
-    } catch (e) {
-      throw Exception("Error sending message: $e");
+    } on TimeoutException {
+      throw const FrappeChatException('Sending timed out');
     }
   }
 
-  /// Updates the typing status for a user in a chat room.
+  /// Publishes a typing indicator.
   ///
-  /// Notifies the server that [user] is currently typing (or has stopped typing)
-  /// in the specified [room]. Set [isTyping] to true when the user starts typing
-  /// and false when they stop.
-  ///
-  /// This is typically called automatically by the chat UI.
-  Future<void> setTyping(String room, String user, bool isTyping) async {
+  /// This is an HTTP call, not a socket emit. Frappe's realtime server has no
+  /// handler that can invoke a whitelisted method, so emitting a typing event
+  /// over the socket does nothing at all.
+  Future<void> setTyping(
+    String room,
+    String user,
+    bool isTyping, {
+    bool isGuest = false,
+  }) async {
     try {
-      var url = Uri.parse(
-        "${config.baseUrl}/api/method/chat.api.message.set_typing",
-      );
-      await _client.post(
-        url,
-        headers: _headers,
-        body: {
-          'room': room,
-          'user': user,
-          'is_typing': isTyping.toString(),
-          'is_guest': 'false',
-        },
-      );
+      await _post('chat.api.message.set_typing', {
+        'room': room,
+        'user': user,
+        'is_typing': isTyping.toString(),
+        'is_guest': isGuest.toString(),
+      });
     } catch (e) {
-      debugPrint("Error setting typing status: $e");
+      // Typing indicators are cosmetic; never surface a failure.
+      debugPrint('flutter_frappe_chat: typing update failed — $e');
     }
   }
 
-  /// Marks a specific message as read/seen.
-  ///
-  /// Uses [frappe.client.set_value] to update the 'seen' status of the [ChatMessage].
-  Future<void> markMessageAsRead(String messageId) async {
+  /// Marks the room as read via `chat.api.message.mark_as_read`.
+  Future<void> markRoomAsRead(String room) async {
     try {
-      var url = Uri.parse(
-        "${config.baseUrl}/api/method/frappe.client.set_value",
-      );
-      await _client.post(
-        url,
-        headers: _headers,
-        body: {
-          'doctype': 'Chat Message',
-          'name': messageId,
-          'fieldname': 'seen',
-          'value': '1',
-        },
-      );
+      await _post('chat.api.message.mark_as_read', {'room': room});
     } catch (e) {
-      debugPrint("Error marking message as read: $e");
+      debugPrint('flutter_frappe_chat: mark as read failed — $e');
     }
   }
+
+  /// Uploads a file and returns its `file_url`.
+  ///
+  /// Privacy follows [FrappeChatConfig.privateAttachments]. A public file lands
+  /// under `/files/`, which Frappe serves to **anyone with the URL and no
+  /// authentication**; a private one lands under `/private/files/` and needs
+  /// [FrappeChatConfig.authHeaders] to fetch.
+  Future<String> uploadFileBytes({
+    required String fileName,
+    required List<int> bytes,
+    bool? isPrivate,
+  }) async {
+    final request = http.MultipartRequest('POST', _uri('upload_file'))
+      ..headers.addAll(_headers)
+      ..fields['file_name'] = fileName
+      ..fields['is_private'] =
+          (isPrivate ?? config.privateAttachments) ? '1' : '0'
+      ..files.add(
+        http.MultipartFile.fromBytes('file', bytes, filename: fileName),
+      );
+
+    try {
+      final streamed = await _client.send(request).timeout(config.timeout);
+      final response = await http.Response.fromStream(streamed);
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data is Map) {
+          final message = data['message'];
+          final url = message is Map ? message['file_url'] : null;
+          if (url is String && url.isNotEmpty) return url;
+        }
+      }
+
+      throw FrappeChatException(
+        'Could not upload $fileName: ${_errorMessage(response)}',
+        statusCode: response.statusCode,
+      );
+    } on TimeoutException {
+      throw FrappeChatException('Upload of $fileName timed out');
+    }
+  }
+
+  /// Releases the HTTP client, when this instance owns it.
+  void dispose() {
+    if (_ownsClient) _client.close();
+  }
+}
+
+/// Thrown when a Frappe Chat API call fails.
+class FrappeChatException implements Exception {
+  final String message;
+  final int? statusCode;
+
+  const FrappeChatException(this.message, {this.statusCode});
+
+  @override
+  String toString() => message;
 }

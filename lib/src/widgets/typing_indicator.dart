@@ -1,34 +1,37 @@
 import 'package:flutter/material.dart';
 
+import '../models/chat_theme.dart';
+
+/// An animated "… is typing" bubble.
 class AnimatedTypingIndicator extends StatefulWidget {
+  /// Display name of the person typing.
   final String username;
 
+  /// Colours for the bubble. Defaults to [FrappeChatTheme].
+  final FrappeChatTheme theme;
+
   const AnimatedTypingIndicator({
-    Key? key,
+    super.key,
     required this.username,
-  }) : super(key: key);
+    this.theme = const FrappeChatTheme(),
+  });
 
   @override
-  _AnimatedTypingIndicatorState createState() =>
+  State<AnimatedTypingIndicator> createState() =>
       _AnimatedTypingIndicatorState();
 }
 
 class _AnimatedTypingIndicatorState extends State<AnimatedTypingIndicator>
     with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Animation<double> _animation;
+  late final AnimationController _controller;
 
   @override
   void initState() {
     super.initState();
     _controller = AnimationController(
-      duration: const Duration(milliseconds: 600),
+      duration: const Duration(milliseconds: 900),
       vsync: this,
-    )..repeat(reverse: true);
-
-    _animation = Tween<double>(begin: 0, end: 10).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
-    );
+    )..repeat();
   }
 
   @override
@@ -39,48 +42,62 @@ class _AnimatedTypingIndicatorState extends State<AnimatedTypingIndicator>
 
   @override
   Widget build(BuildContext context) {
-    // Determine initial
-    String initial =
-        widget.username.isNotEmpty ? widget.username[0].toUpperCase() : "?";
+    final theme = widget.theme;
 
-    return Row(
-      children: [
-        AnimatedBuilder(
-          animation: _animation,
-          builder: (context, child) {
-            return Transform.translate(
-              offset: Offset(0, -_animation.value),
-              child: child,
-            );
-          },
-          child: Container(
-            width: 24,
-            height: 24,
-            decoration: const BoxDecoration(
-              color: Colors.green, // WhatsApp-like green
-              shape: BoxShape.circle,
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              initial,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
+    return Semantics(
+      liveRegion: true,
+      label: '${widget.username} is typing',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: theme.incomingBubble,
+          borderRadius: BorderRadius.circular(theme.bubbleRadius),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              widget.username,
+              style: TextStyle(
                 fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: theme.senderNameColor,
               ),
             ),
-          ),
+            const SizedBox(width: 8),
+            for (var i = 0; i < 3; i++) _Dot(_controller, i, theme.metaColor),
+          ],
         ),
-        const SizedBox(width: 8),
-        Text(
-          "typing...",
-          style: TextStyle(
-            fontSize: 12,
-            fontStyle: FontStyle.italic,
-            color: Colors.grey[600],
-          ),
-        )
-      ],
+      ),
+    );
+  }
+}
+
+class _Dot extends StatelessWidget {
+  final AnimationController controller;
+  final int index;
+  final Color color;
+
+  const _Dot(this.controller, this.index, this.color);
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, child) {
+        // Stagger each dot by a third of the cycle.
+        final phase = (controller.value + index / 3) % 1.0;
+        final lift = (phase < 0.5 ? phase : 1 - phase) * 8;
+        return Padding(
+          padding: EdgeInsets.only(right: 3, bottom: lift),
+          child: child,
+        );
+      },
+      child: Container(
+        width: 6,
+        height: 6,
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+      ),
     );
   }
 }

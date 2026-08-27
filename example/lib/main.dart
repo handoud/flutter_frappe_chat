@@ -6,7 +6,7 @@ void main() {
 }
 
 class MyApp extends StatelessWidget {
-  const MyApp({Key? key}) : super(key: key);
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -22,7 +22,7 @@ class MyApp extends StatelessWidget {
 }
 
 class HomePage extends StatefulWidget {
-  const HomePage({Key? key}) : super(key: key);
+  const HomePage({super.key});
 
   @override
   State<HomePage> createState() => _HomePageState();
@@ -64,6 +64,8 @@ class _HomePageState extends State<HomePage> {
     // Create the configuration
     final config = FrappeChatConfig(
       baseUrl: _baseUrlController.text,
+      // The Socket.IO namespace is derived from baseUrl's host. Set siteName
+      // here if your Frappe site name differs from the host.
       apiKey: _apiKeyController.text.isNotEmpty
           ? _apiKeyController.text
           : null,
@@ -84,6 +86,9 @@ class _HomePageState extends State<HomePage> {
           chatPartnerName: _partnerNameController.text.isNotEmpty
               ? _partnerNameController.text
               : null,
+          // Derive the chat palette from the app's own theme, dark mode
+          // included.
+          theme: FrappeChatTheme.fromTheme(Theme.of(context)),
         ),
       ),
     );

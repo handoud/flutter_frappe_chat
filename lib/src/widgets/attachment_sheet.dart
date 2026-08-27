@@ -1,69 +1,91 @@
-import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'dart:io';
+
 import '../utils/permissions.dart';
 
-class AttachmentSheet extends StatelessWidget {
-  final Function(File) onFileSelected;
+/// A file chosen for upload, held in memory.
+typedef PickedAttachment = ({String name, List<int> bytes});
 
-  const AttachmentSheet({Key? key, required this.onFileSelected})
-      : super(key: key);
+/// Bottom sheet offering camera, gallery and file pickers.
+class AttachmentSheet extends StatelessWidget {
+  /// Called with the chosen file's name and bytes.
+  final void Function(PickedAttachment attachment) onFileSelected;
+
+  /// Called when a picker fails or a permission is refused.
+  final void Function(String message)? onError;
+
+  const AttachmentSheet({
+    super.key,
+    required this.onFileSelected,
+    this.onError,
+  });
 
   Future<void> _pickImage(ImageSource source) async {
-    // Check permissions if needed (camera usually handled by plugin or OS)
-    if (source == ImageSource.camera) {
-      if (!await ChatPermissions.requestCamera()) return;
+    if (source == ImageSource.camera &&
+        !await ChatPermissions.requestCamera()) {
+      onError?.call('Camera access is needed to take a photo');
+      return;
     }
 
-    final picker = ImagePicker();
-    final pickedFile = await picker.pickImage(source: source);
-    if (pickedFile != null) {
-      onFileSelected(File(pickedFile.path));
+    try {
+      final picked = await ImagePicker().pickImage(
+        source: source,
+        imageQuality: 85,
+      );
+      if (picked == null) return;
+
+      onFileSelected((name: picked.name, bytes: await picked.readAsBytes()));
+    } catch (e) {
+      onError?.call('Could not open the picker: $e');
     }
   }
 
   Future<void> _pickFile() async {
-    // Permission might be needed for older androids
-    if (!await ChatPermissions.requestStorage()) return;
+    try {
+      final result = await FilePicker.pickFiles(withData: true);
+      final file = result?.files.singleOrNull;
+      if (file == null) return;
 
-    FilePickerResult? result = await FilePicker.platform.pickFiles();
-    if (result != null && result.files.single.path != null) {
-      onFileSelected(File(result.files.single.path!));
+      final bytes = file.bytes;
+      if (bytes == null) {
+        onError?.call('Could not read ${file.name}');
+        return;
+      }
+
+      onFileSelected((name: file.name, bytes: bytes));
+    } catch (e) {
+      onError?.call('Could not open the file picker: $e');
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
+    return SafeArea(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           ListTile(
-            leading: const Icon(Icons.camera_alt),
+            leading: const Icon(Icons.camera_alt_outlined),
             title: const Text('Camera'),
-            onTap: () async {
+            onTap: () {
               Navigator.pop(context);
-              await Future.delayed(const Duration(milliseconds: 500));
               _pickImage(ImageSource.camera);
             },
           ),
           ListTile(
-            leading: const Icon(Icons.photo),
+            leading: const Icon(Icons.photo_outlined),
             title: const Text('Gallery'),
-            onTap: () async {
+            onTap: () {
               Navigator.pop(context);
-              await Future.delayed(const Duration(milliseconds: 500));
               _pickImage(ImageSource.gallery);
             },
           ),
           ListTile(
             leading: const Icon(Icons.attach_file),
             title: const Text('File'),
-            onTap: () async {
+            onTap: () {
               Navigator.pop(context);
-              await Future.delayed(const Duration(milliseconds: 500));
               _pickFile();
             },
           ),

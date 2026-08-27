@@ -1,157 +1,206 @@
 import 'dart:async';
+import 'dart:io' show File;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_sound/flutter_sound.dart';
+import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 
+import '../models/chat_theme.dart';
+
+/// Inline player for a voice note.
 class ChatAudioPlayer extends StatefulWidget {
+  /// Absolute URL of the audio file.
   final String audioUrl;
+
+  /// Whether the current user sent it.
   final bool isMe;
 
+  /// Colours and shapes.
+  final FrappeChatTheme theme;
+
+  /// Headers used to fetch the file.
+  ///
+  /// flutter_sound cannot send headers itself, so when these are non-empty the
+  /// file is downloaded to a temporary file first and played from there. That
+  /// is what makes private attachments (`/private/files/...`) playable.
+  final Map<String, String> headers;
+
   const ChatAudioPlayer({
-    Key? key,
+    super.key,
     required this.audioUrl,
     required this.isMe,
-  }) : super(key: key);
+    this.theme = const FrappeChatTheme(),
+    this.headers = const {},
+  });
 
   @override
-  _ChatAudioPlayerState createState() => _ChatAudioPlayerState();
+  State<ChatAudioPlayer> createState() => _ChatAudioPlayerState();
 }
 
 class _ChatAudioPlayerState extends State<ChatAudioPlayer> {
-  FlutterSoundPlayer? _player;
+  final FlutterSoundPlayer _player = FlutterSoundPlayer();
+
+  StreamSubscription<PlaybackDisposition>? _progress;
+  bool _ready = false;
   bool _isPlaying = false;
   bool _isPaused = false;
   Duration _duration = Duration.zero;
   Duration _position = Duration.zero;
-  StreamSubscription? _playerSubscription;
 
   @override
   void initState() {
     super.initState();
-    _player = FlutterSoundPlayer();
-    _initPlayer();
+    _open();
   }
 
-  Future<void> _initPlayer() async {
-    await _player!.openPlayer();
-    _player!.setSubscriptionDuration(const Duration(milliseconds: 100));
+  Future<void> _open() async {
+    await _player.openPlayer();
+    await _player.setSubscriptionDuration(const Duration(milliseconds: 200));
+    if (mounted) setState(() => _ready = true);
   }
 
   @override
   void dispose() {
-    _player!.closePlayer();
-    _playerSubscription?.cancel();
+    unawaited(_progress?.cancel());
+    unawaited(_player.closePlayer());
     super.dispose();
   }
 
-  Future<void> _play() async {
-    if (_isPaused) {
-      await _player!.resumePlayer();
-    } else {
-      await _player!.startPlayer(
-          fromURI: widget.audioUrl,
-          codec: Codec.aacADTS, // Try default or auto detection
-          whenFinished: () {
-            setState(() {
-              _isPlaying = false;
-              _isPaused = false;
-              _position = Duration.zero;
-            });
-          });
-      _playerSubscription = _player!.onProgress!.listen((e) {
-        setState(() {
-          _position = e.position;
-          _duration = e.duration;
-        });
-      });
+  /// Resolves what flutter_sound should open.
+  ///
+  /// A public URL is streamed directly. A private one needs credentials that
+  /// flutter_sound cannot attach, so it is fetched here and cached on disk.
+  Future<String> _resolveSource() async {
+    if (widget.headers.isEmpty) return widget.audioUrl;
+
+    final tempDir = await getTemporaryDirectory();
+    final name = Uri.parse(widget.audioUrl).pathSegments.last;
+    final file = File('${tempDir.path}/frappe_chat_$name');
+
+    if (!await file.exists()) {
+      final response =
+          await http.get(Uri.parse(widget.audioUrl), headers: widget.headers);
+      if (response.statusCode != 200) {
+        throw Exception('Could not download audio (${response.statusCode})');
+      }
+      await file.writeAsBytes(response.bodyBytes, flush: true);
     }
 
-    setState(() {
-      _isPlaying = true;
-      _isPaused = false;
+    return file.path;
+  }
+
+  Future<void> _play() async {
+    if (!_ready) return;
+
+    if (_isPaused) {
+      await _player.resumePlayer();
+      if (mounted) setState(() => _isPaused = false);
+      return;
+    }
+
+    unawaited(_progress?.cancel());
+    _progress = _player.onProgress?.listen((event) {
+      if (!mounted) return;
+      setState(() {
+        _position = event.position;
+        _duration = event.duration;
+      });
     });
+
+    try {
+      final source = await _resolveSource();
+
+      await _player.startPlayer(
+        fromURI: source,
+        whenFinished: () {
+          if (!mounted) return;
+          setState(() {
+            _isPlaying = false;
+            _isPaused = false;
+            _position = Duration.zero;
+          });
+        },
+      );
+    } catch (e) {
+      debugPrint('flutter_frappe_chat: could not play audio — $e');
+      if (mounted) setState(() => _isPlaying = false);
+      return;
+    }
+
+    if (mounted) setState(() => _isPlaying = true);
   }
 
   Future<void> _pause() async {
-    await _player!.pausePlayer();
-    setState(() {
-      _isPlaying = false;
-      _isPaused = true;
-    });
+    await _player.pausePlayer();
+    if (mounted) setState(() => _isPaused = true);
   }
 
-  Future<void> _seek(double value) async {
-    await _player!.seekToPlayer(Duration(milliseconds: value.toInt()));
-  }
+  Future<void> _seek(double milliseconds) =>
+      _player.seekToPlayer(Duration(milliseconds: milliseconds.round()));
 
-  String _formatDuration(Duration d) {
-    String twoDigits(int n) => n.toString().padLeft(2, "0");
-    String twoDigitMinutes = twoDigits(d.inMinutes.remainder(60));
-    String twoDigitSeconds = twoDigits(d.inSeconds.remainder(60));
-    return "$twoDigitMinutes:$twoDigitSeconds";
+  static String _format(Duration d) {
+    final minutes = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final seconds = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
   }
 
   @override
   Widget build(BuildContext context) {
-    final color = widget.isMe ? Colors.black54 : Colors.grey[800];
-    final activeColor = widget.isMe ? const Color(0xFF075E54) : Colors.blue;
+    final theme = widget.theme;
+    final maxMs = _duration.inMilliseconds.toDouble();
+    final valueMs = _position.inMilliseconds.toDouble().clamp(0, maxMs);
+    final showPause = _isPlaying && !_isPaused;
 
-    return Container(
-      width: 250,
-      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-      decoration: BoxDecoration(
-        color: Colors.black.withValues(alpha: 0.05),
-        borderRadius: BorderRadius.circular(10),
-      ),
+    return SizedBox(
+      width: 240,
       child: Row(
         children: [
           IconButton(
+            tooltip: showPause ? 'Pause' : 'Play',
             icon: Icon(
-              _isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled,
-              color: activeColor,
-              size: 36,
+              showPause
+                  ? Icons.pause_circle_filled
+                  : Icons.play_circle_filled,
+              color: theme.accent,
+              size: 34,
             ),
-            onPressed: _isPlaying ? _pause : _play,
+            onPressed: _ready ? (showPause ? _pause : _play) : null,
           ),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 SliderTheme(
                   data: SliderTheme.of(context).copyWith(
                     thumbShape:
                         const RoundSliderThumbShape(enabledThumbRadius: 6),
-                    trackHeight: 4,
-                    activeTrackColor: activeColor,
-                    inactiveTrackColor: Colors.grey[300],
-                    thumbColor: activeColor,
+                    trackHeight: 3,
+                    activeTrackColor: theme.accent,
+                    thumbColor: theme.accent,
+                    overlayShape:
+                        const RoundSliderOverlayShape(overlayRadius: 12),
                   ),
                   child: Slider(
                     min: 0,
-                    max: _duration.inMilliseconds.toDouble() > 0
-                        ? _duration.inMilliseconds.toDouble()
-                        : 1.0,
-                    value: (_position.inMilliseconds.toDouble() <=
-                                _duration.inMilliseconds.toDouble() &&
-                            _position.inMilliseconds.toDouble() >= 0)
-                        ? _position.inMilliseconds.toDouble()
-                        : 0,
-                    onChanged: (value) {
-                      _seek(value);
-                    },
+                    max: maxMs > 0 ? maxMs : 1,
+                    value: maxMs > 0 ? valueMs.toDouble() : 0,
+                    onChanged: maxMs > 0 ? _seek : null,
                   ),
                 ),
                 Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12.0),
+                  padding: const EdgeInsets.symmetric(horizontal: 10),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Text(
-                        _formatDuration(_position),
-                        style: TextStyle(fontSize: 10, color: color),
+                        _format(_position),
+                        style: TextStyle(fontSize: 10, color: theme.metaColor),
                       ),
                       Text(
-                        _formatDuration(_duration),
-                        style: TextStyle(fontSize: 10, color: color),
+                        _format(_duration),
+                        style: TextStyle(fontSize: 10, color: theme.metaColor),
                       ),
                     ],
                   ),

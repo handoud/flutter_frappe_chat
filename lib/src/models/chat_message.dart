@@ -1,36 +1,34 @@
-/// Represents a single chat message in the Frappe Chat system.
-///
-/// A [ChatMessage] contains all the information about a message sent in a chat room,
-/// including the message content, sender information, and timestamp.
+/// A single message in a Frappe Chat room.
 class ChatMessage {
-  /// The text content of the message.
-  ///
-  /// This can also contain file URLs if the message is a file attachment.
+  /// The message text, or the URL of an attachment.
   final String content;
 
-  /// The username of the person who sent the message.
+  /// Display name of the sender.
   final String sender;
 
-  /// The unique identifier of the chat room where this message was sent.
+  /// The room this message belongs to.
   final String room;
 
-  /// The email address of the message sender.
-  ///
-  /// This is optional and may be null for guest users.
+  /// Email of the sender. Null for guests.
   final String? senderEmail;
 
-  /// The timestamp when the message was created in ISO 8601 format.
+  /// Creation timestamp, as returned by the server.
   final String creation;
 
-  /// The unique identifier of the message (DocName).
+  /// The Frappe document name (id).
+  ///
+  /// **Usually empty.** The stock `chat.api.message.get_all` selects only
+  /// `content`, `sender`, `creation` and `sender_email`, and the realtime
+  /// payload carries no id either. Use [localKey] to identify a message.
   final String name;
 
-  /// Whether the message has been seen by the recipient.
+  /// Whether the message has been read.
+  ///
+  /// **The stock `Chat Message` DocType has no `seen` field**, so this is false
+  /// unless your site adds one. Read receipts in the bundled UI are off by
+  /// default for this reason.
   final bool seen;
 
-  /// Creates a new [ChatMessage] instance.
-  ///
-  /// All fields except [senderEmail] are required.
   ChatMessage({
     required this.name,
     required this.content,
@@ -41,21 +39,36 @@ class ChatMessage {
     this.seen = false,
   });
 
-  /// Creates a [ChatMessage] from a JSON map.
+  /// A stable identity for this message.
   ///
-  /// This is typically used when deserializing messages received from the Frappe API.
-  /// The JSON map should contain keys: 'content', 'sender', 'room', 'sender_email', and 'creation'.
+  /// Falls back to creation time plus sender when the server did not send a
+  /// document name, which is the normal case. Used to merge socket messages
+  /// with loaded history without duplicating them.
+  String get localKey =>
+      name.isNotEmpty ? name : '$creation|${senderEmail ?? sender}|$content';
+
+  /// [creation] parsed as a [DateTime], or null when it is missing or invalid.
+  DateTime? get createdAt => DateTime.tryParse(creation);
+
+  /// Whether this message was sent by [email] or [displayName].
+  bool isFrom({String? email, String? displayName}) {
+    if (email != null && senderEmail != null && senderEmail == email) {
+      return true;
+    }
+    return displayName != null && sender == displayName;
+  }
+
   factory ChatMessage.fromJson(dynamic json) {
     if (json is! Map) {
       return ChatMessage(
         name: '',
-        content: 'Error: Invalid message format',
+        content: '',
         sender: 'System',
         room: '',
         creation: '',
-        seen: false,
       );
     }
+
     return ChatMessage(
       name: json['name']?.toString() ?? '',
       content: json['content']?.toString() ?? '',
@@ -65,7 +78,6 @@ class ChatMessage {
       senderEmail:
           json['sender_email']?.toString() ?? json['email']?.toString(),
       creation: json['creation']?.toString() ?? '',
-      // Check for common 'seen' or 'read' flags
       seen: json['seen'] == true ||
           json['seen'] == 1 ||
           json['read'] == true ||
@@ -73,18 +85,33 @@ class ChatMessage {
     );
   }
 
-  /// Converts this [ChatMessage] to a JSON map.
-  ///
-  /// This is useful for serializing messages before sending them to the Frappe API.
-  Map<String, dynamic> toJson() {
-    return {
-      'name': name,
-      'content': content,
-      'sender': sender,
-      'room': room,
-      'sender_email': senderEmail,
-      'creation': creation,
-      'seen': seen,
-    };
-  }
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'content': content,
+        'sender': sender,
+        'room': room,
+        'sender_email': senderEmail,
+        'creation': creation,
+        'seen': seen,
+      };
+
+  ChatMessage copyWith({bool? seen}) => ChatMessage(
+        name: name,
+        content: content,
+        sender: sender,
+        room: room,
+        senderEmail: senderEmail,
+        creation: creation,
+        seen: seen ?? this.seen,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      other is ChatMessage && other.localKey == localKey;
+
+  @override
+  int get hashCode => localKey.hashCode;
+
+  @override
+  String toString() => 'ChatMessage($sender: $content)';
 }
